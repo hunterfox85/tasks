@@ -829,33 +829,45 @@ const actions = {
 	},
 
 	/**
-	 * Moves a task to the provided calendar
+	 * Moves a task to a new parent task
+	 *
+	 * @param {Object} context The store mutations
+	 * @param {Object} data Destructuring object
+	 * @param {Task} data.task The task to move
+	 * @param {String} data.parentId The id of the new parent
+	 */
+	async setTaskParent(context, { task, parentId }) {
+		// Only update the parentId in case it differs from the current one.
+		if (task.related !== parentId) {
+			// Remove the task from the parents subtask list
+			context.commit('deleteTaskFromParent', task)
+			// Unlink the related parent task
+			context.commit('setTaskParent', { task: task, related: parentId })
+			// Add task to new parent
+			context.commit('addTaskToParent', { task: task })
+			// We have to send an update.
+			await context.dispatch('scheduleTaskUpdate', task)
+		}
+	},
+
+	/**
+	 * Moves a task to a new calendar or parent task
 	 *
 	 * @param {Object} context The store mutations
 	 * @param {Object} data Destructuring object
 	 * @param {Task} data.task The task to move
 	 * @param {Calendar} data.calendar The calendar to move the task to
-	 * @param {Boolean} data.removeParent If the task has a parent, remove the link to the parent
+	 * @param {String} data.parentId The id of the new parent
 	 * @returns {Task} The moved task
 	 */
-	async moveTaskToCalendar(context, { task, calendar, removeParent = true }) {
-		// Only local move if the task doesn't exist on the server.
+	async moveTask(context, { task, calendar, parentId = null }) {
+
 		// Don't move if source and target calendar are the same.
 		if (task.dav && task.calendar !== calendar) {
 			// Move all subtasks first
 			await Promise.all(Object.values(task.subTasks).map(async(subTask) => {
-				await context.dispatch('moveTaskToCalendar', { task: subTask, calendar: calendar, removeParent: false })
+				await context.dispatch('moveTask', { task: subTask, calendar: calendar, parentId: task.uid })
 			}))
-
-			// If a task has a parent task which is not moved, remove the reference to it.
-			if (removeParent && task.related !== null) {
-				// Remove the task from the parents subtask list
-				context.commit('deleteTaskFromParent', task)
-				// Unlink the related parent task
-				context.commit('setTaskParent', { task: task, related: null })
-				// We have to send an update.
-				await context.dispatch('updateTask', task)
-			}
 
 			await task.dav.move(calendar.dav)
 				.then((response) => {
@@ -871,6 +883,10 @@ const actions = {
 					OC.Notification.showTemporary(t('calendars', 'An error occurred'))
 				})
 		}
+
+		// Set the new parent
+		await context.dispatch('setTaskParent', { task: task, parentId: parentId })
+
 		return task
 	},
 }
